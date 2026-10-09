@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" font-family="Roboto, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#5f6368"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#1a73e8"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#1e8e3e"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="440" rx="12" fill="#f8f9fa" stroke="#dadce0" stroke-width="1.5"/>
+  <text x="480" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#202124">Google Cloud Event-Driven VOD Transcoding Architecture</text>
+
+  <!-- GCP Boundary Box -->
+  <rect x="330" y="55" width="600" height="360" rx="10" fill="#ffffff" stroke="#1a73e8" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="350" y="80" font-size="13" font-weight="700" fill="#1a73e8">Google Cloud Platform</text>
+
+  <!-- Node 1: React Frontend -->
+  <g filter="url(#shadow)">
+    <rect x="35" y="135" width="195" height="90" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="2"/>
+    <text x="132" y="168" text-anchor="middle" font-size="14" font-weight="700" fill="#174ea6">React Frontend</text>
+    <text x="132" y="188" text-anchor="middle" font-size="12" fill="#3c4043">vod-frontend (Vite)</text>
+    <text x="132" y="206" text-anchor="middle" font-size="11" fill="#5f6368">EventSource + ReactPlayer</text>
+  </g>
+
+  <!-- Node 2: Node.js Backend -->
+  <g filter="url(#shadow)">
+    <rect x="365" y="135" width="205" height="90" rx="8" fill="#fef7e0" stroke="#f9ab00" stroke-width="2"/>
+    <text x="467" y="168" text-anchor="middle" font-size="14" font-weight="700" fill="#b06000">Node.js Backend</text>
+    <text x="467" y="188" text-anchor="middle" font-size="12" fill="#3c4043">vod-backend (Express)</text>
+    <text x="467" y="206" text-anchor="middle" font-size="11" fill="#5f6368">REST + SSE + Pub/Sub Sub</text>
+  </g>
+
+  <!-- Node 3: Transcoder API -->
+  <g filter="url(#shadow)">
+    <rect x="700" y="135" width="200" height="90" rx="8" fill="#e6f4ea" stroke="#1e8e3e" stroke-width="2"/>
+    <text x="800" y="168" text-anchor="middle" font-size="14" font-weight="700" fill="#137333">Transcoder API</text>
+    <text x="800" y="188" text-anchor="middle" font-size="12" fill="#3c4043">H.264 SD (360p) &amp; HD (720p)</text>
+    <text x="800" y="206" text-anchor="middle" font-size="11" fill="#5f6368">MP4 / HLS (.m3u8) / DASH (.mpd)</text>
+  </g>
+
+  <!-- Node 4: Raw Videos Bucket -->
+  <g filter="url(#shadow)">
+    <rect x="700" y="45" width="200" height="58" rx="8" fill="#f1f3f4" stroke="#5f6368" stroke-width="1.5"/>
+    <text x="800" y="71" text-anchor="middle" font-size="13" font-weight="700" fill="#202124">Cloud Storage (Raw)</text>
+    <text x="800" y="89" text-anchor="middle" font-size="11" fill="#5f6368">gs://...-raw-videos/sample.mp4</text>
+  </g>
+
+  <!-- Node 5: Cloud Pub/Sub -->
+  <g filter="url(#shadow)">
+    <rect x="530" y="295" width="210" height="85" rx="8" fill="#f3e8fd" stroke="#9334e6" stroke-width="2"/>
+    <text x="635" y="326" text-anchor="middle" font-size="14" font-weight="700" fill="#681da8">Cloud Pub/Sub</text>
+    <text x="635" y="346" text-anchor="middle" font-size="12" fill="#3c4043">Topic: transcoder-updates</text>
+    <text x="635" y="364" text-anchor="middle" font-size="11" fill="#5f6368">Sub: transcoder-updates-sub</text>
+  </g>
+
+  <!-- Node 6: Transcoded Bucket + Media CDN -->
+  <g filter="url(#shadow)">
+    <rect x="35" y="295" width="240" height="85" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="2"/>
+    <text x="155" y="326" text-anchor="middle" font-size="14" font-weight="700" fill="#174ea6">Media CDN &amp; GCS Output</text>
+    <text x="155" y="346" text-anchor="middle" font-size="12" fill="#3c4043">gs://...-transcoded-videos/</text>
+    <text x="155" y="364" text-anchor="middle" font-size="11" fill="#5f6368">output-sample.mp4/manifest.m3u8</text>
+  </g>
+
+  <!-- Edges -->
+  <!-- 1. POST /api/transcode -->
+  <line x1="230" y1="162" x2="358" y2="162" stroke="#1a73e8" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="294" y="153" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">1. POST /api/transcode</text>
+
+  <!-- 2. createJob() -->
+  <line x1="570" y1="175" x2="692" y2="175" stroke="#5f6368" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="631" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="#3c4043">2. createJob()</text>
+
+  <!-- Raw GCS to Transcoder -->
+  <line x1="800" y1="103" x2="800" y2="128" stroke="#5f6368" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="852" y="120" text-anchor="middle" font-size="10" fill="#5f6368">Read inputUri</text>
+
+  <!-- 3a. Publish job state to Pub/Sub -->
+  <path d="M 800 225 L 800 337 L 748 337" fill="none" stroke="#1e8e3e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="845" y="285" text-anchor="middle" font-size="11" font-weight="700" fill="#1e8e3e">3. Job SUCCEEDED</text>
+
+  <!-- 3b. Write HLS/DASH to Output Bucket -->
+  <path d="M 760 225 L 760 400 L 155 400 L 155 386" fill="none" stroke="#5f6368" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+  <text x="455" y="415" text-anchor="middle" font-size="11" fill="#5f6368">Write MP4s, .ts/.m4s segments &amp; manifest.m3u8</text>
+
+  <!-- 4. Pull Message -->
+  <path d="M 530 337 L 467 337 L 467 232" fill="none" stroke="#9334e6" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="435" y="285" text-anchor="end" font-size="11" font-weight="700" fill="#681da8">4. Pub/Sub Push/Pull</text>
+
+  <!-- 5. SSE Event -->
+  <line x1="365" y1="198" x2="237" y2="198" stroke="#1e8e3e" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="296" y="215" text-anchor="middle" font-size="11" font-weight="700" fill="#1e8e3e">5. SSE (/api/events)</text>
+
+  <!-- 6. Stream HLS -->
+  <line x1="132" y1="225" x2="132" y2="288" stroke="#1a73e8" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="195" y="262" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">6. Play HLS (.m3u8)</text>
+</svg>

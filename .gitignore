@@ -1,0 +1,20 @@
+# Ignore application code (only publish the codelab)
+vod-backend/
+vod-frontend/
+
+# Dependencies & Build outputs
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Logs & OS files
+*.log
+.DS_Store
+**/.DS_Store
+
+# Environment & credentials
+.env
+.env.*
+*.json.key
+service-account*.json

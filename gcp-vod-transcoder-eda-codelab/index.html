@@ -1,0 +1,536 @@
+
+<!doctype html>
+
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, user-scalable=yes">
+  <meta name="theme-color" content="#4F7DC9">
+  <meta charset="UTF-8">
+  <title>Build an Event-Driven VOD Pipeline with Cloud Transcoder API, Pub/Sub, and React</title>
+  <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Source+Code+Pro:400|Roboto:400,300,400italic,500,700|Roboto+Mono">
+  <link rel="stylesheet" href="//fonts.googleapis.com/icon?family=Material+Icons">
+  <link rel="stylesheet" href="https://storage.googleapis.com/claat-public/codelab-elements.css">
+  <style>
+    .success {
+      color: #1e8e3e;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <google-codelab-analytics gaid="UA-49880327-14" ga4id=""></google-codelab-analytics>
+  <google-codelab codelab-gaid=""
+                  codelab-ga4id=""
+                  id="gcp-vod-transcoder-eda-codelab"
+                  title="Build an Event-Driven VOD Pipeline with Cloud Transcoder API, Pub/Sub, and React"
+                  environment="web"
+                  feedback-link="">
+    
+      <google-codelab-step label="Overview" duration="5">
+        <p>In this codelab, you will build an end-to-end, event-driven <strong>Video on Demand (VOD)</strong> transcoding application on Google Cloud.</p>
+<p>Instead of polling the Transcoder API for job completion, you will implement an <strong>Event-Driven Architecture (EDA)</strong>: when a video transcoding job finishes, the <strong>Google Cloud Transcoder API</strong> automatically publishes a state change notification to <strong>Cloud Pub/Sub</strong>. Your <strong>Node.js (Express)</strong> backend listens to a Pub/Sub subscription and pushes real-time status updates and the final streaming URL directly to a <strong>React</strong> frontend using <strong>Server-Sent Events (SSE)</strong>.</p>
+<h2 is-upgraded>Architecture Flow</h2>
+<p class="image-container"><img alt="VOD Transcoding Event-Driven Architecture" src="img/c79b4d5a2901f18d.svg"></p>
+<p><em>View interactive diagram: </em><a href="https://graphviz.corp.google.com/#e72c84cdd58025706b4d0456af1af21a" target="_blank"><em>Graphviz Architecture Diagram</em></a></p>
+<h2 is-upgraded>What You Will Build</h2>
+<ul>
+<li><strong>Google Cloud Infrastructure</strong>: Raw and transcoded Cloud Storage buckets, a Pub/Sub topic and subscription for job notifications, and Media CDN / streaming delivery endpoints.</li>
+<li><strong>Node.js Backend (</strong><strong><code>vod-backend</code></strong><strong>)</strong>: <ul>
+<li>A <strong>Server-Sent Events (</strong><strong><code>/api/events</code></strong><strong>)</strong> endpoint to push real-time updates to connected browsers.</li>
+<li>A <strong>Transcoder Job Submission (</strong><strong><code>/api/transcode</code></strong><strong>)</strong> endpoint that configures multi-bitrate H.264 elementary streams (360p SD and 720p HD), container muxing (<code>mp4</code>, <code>ts</code>, <code>fmp4</code>), and adaptive bitrate manifests (<code>HLS</code> and <code>DASH</code>).</li>
+<li>A <strong>Pub/Sub Subscriber Worker</strong> that listens for <code>SUCCEEDED</code> events, queries the completed job metadata, constructs the playback URL, and broadcasts it via SSE.</li>
+</ul>
+</li>
+<li><strong>React Frontend (</strong><strong><code>vod-frontend</code></strong><strong>)</strong>: <ul>
+<li>A reactive UI that triggers transcoding jobs, subscribes to the backend SSE stream for live status updates, and automatically plays the transcoded HLS stream using <code>react-player</code>.</li>
+</ul>
+</li>
+</ul>
+<h2 is-upgraded>Prerequisites</h2>
+<ul>
+<li>A Google Cloud Project with billing enabled.</li>
+<li><a href="https://cloud.google.com/sdk/docs/install" target="_blank">Google Cloud SDK (<code>gcloud</code>)</a> installed and authenticated.</li>
+<li><strong>Node.js</strong> (v18+ recommended) and <strong>npm</strong> installed locally.</li>
+<li>Basic familiarity with JavaScript, Express, and React.</li>
+</ul>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Set Up Google Cloud Infrastructure" duration="10">
+        <p>Before running the backend and frontend applications, set up the required Google Cloud resources.</p>
+<h2 is-upgraded>1. Configure Environment Variables</h2>
+<p>Open a terminal and set your Google Cloud Project ID and preferred region:</p>
+<pre><code language="language-bash" class="language-bash">export PROJECT_ID=&#34;your-project-id&#34;
+export LOCATION=&#34;us-central1&#34;
+
+gcloud config set project $PROJECT_ID
+</code></pre>
+<h2 is-upgraded>2. Enable Required APIs</h2>
+<p>Enable the Video Transcoder, Cloud Pub/Sub, and Cloud Storage APIs:</p>
+<pre><code language="language-bash" class="language-bash">gcloud services enable \
+  transcoder.googleapis.com \
+  pubsub.googleapis.com \
+  storage.googleapis.com
+</code></pre>
+<h2 is-upgraded>3. Create Cloud Storage Buckets</h2>
+<p>Create two buckets: one for raw uploaded source videos and one for the transcoded outputs (MP4s, HLS segments, DASH segments, and manifests).</p>
+<pre><code language="language-bash" class="language-bash"># Bucket for source videos
+gcloud storage buckets create gs://${PROJECT_ID}-raw-videos --location=$LOCATION
+
+# Bucket for transcoded output streams and manifests
+gcloud storage buckets create gs://${PROJECT_ID}-transcoded-videos --location=$LOCATION
+</code></pre>
+<p>Upload a sample video named <code>sample.mp4</code> to your raw videos bucket:</p>
+<pre><code language="language-bash" class="language-bash">gcloud storage cp /path/to/your/sample.mp4 gs://${PROJECT_ID}-raw-videos/sample.mp4
+</code></pre>
+<h2 is-upgraded>4. Create the Pub/Sub Topic and Subscription</h2>
+<p>The Transcoder API will publish job state updates to a Pub/Sub topic, and our Node.js backend will consume messages from a pull subscription.</p>
+<pre><code language="language-bash" class="language-bash"># Create the topic
+gcloud pubsub topics create transcoder-updates
+
+# Create the subscription for the Node.js worker
+gcloud pubsub subscriptions create transcoder-updates-sub \
+  --topic=transcoder-updates
+</code></pre>
+<h2 is-upgraded>5. Grant Pub/Sub Publisher Role to the Transcoder Service Agent</h2>
+<p>Ensure the Transcoder Service Agent has permission to publish job status updates to your Pub/Sub topic:</p>
+<pre><code language="language-bash" class="language-bash">PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format=&#34;value(projectNumber)&#34;)
+
+gcloud pubsub topics add-iam-policy-binding transcoder-updates \
+  --member=&#34;serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-transcoder.iam.gserviceaccount.com&#34; \
+  --role=&#34;roles/pubsub.publisher&#34;
+</code></pre>
+<h2 is-upgraded>6. Authenticate Local Application Default Credentials (ADC)</h2>
+<p>So your local Node.js server can call the Transcoder API and listen to Pub/Sub, authenticate with Application Default Credentials:</p>
+<pre><code language="language-bash" class="language-bash">gcloud auth application-default login
+</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Initialize the Node.js Backend (
+vod-backend)" duration="8">
+        <p>Now let&#39;s build the Express backend that submits transcoding jobs, listens to Pub/Sub events, and streams real-time updates to the frontend over Server-Sent Events (SSE).</p>
+<h2 is-upgraded>1. Create the Backend Project and Install Dependencies</h2>
+<p>Create a new directory named <code>vod-backend</code>, initialize <code>package.json</code>, and install the required packages:</p>
+<pre><code language="language-bash" class="language-bash">mkdir vod-backend &amp;&amp; cd vod-backend
+npm init -y
+npm install express cors @google-cloud/video-transcoder @google-cloud/pubsub
+</code></pre>
+<p>Here is what each package does:</p>
+<ul>
+<li><code>express</code>: Web server framework for REST and SSE endpoints.</li>
+<li><code>cors</code>: Enables Cross-Origin Resource Sharing so our Vite frontend can call the backend.</li>
+<li><code>@google-cloud/video-transcoder</code>: Official Google Cloud client library to create and inspect Transcoder jobs.</li>
+<li><code>@google-cloud/pubsub</code>: Official Google Cloud client library to subscribe to job completion events.</li>
+</ul>
+<h2 is-upgraded>2. Configure Constants and the Real-Time SSE Endpoint</h2>
+<p>Create a file named <code>server.js</code> inside <code>vod-backend/</code> and add the initial setup and <code>/api/events</code> SSE endpoint:</p>
+<pre><code language="language-javascript" class="language-javascript">const express = require(&#39;express&#39;);
+const cors = require(&#39;cors&#39;);
+const { TranscoderServiceClient } = require(&#39;@google-cloud/video-transcoder&#39;).v1;
+const { PubSub } = require(&#39;@google-cloud/pubsub&#39;);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const PROJECT_ID = &#39;your-project-id&#39;; // Replace with your GCP Project ID
+const LOCATION = &#39;us-central1&#39;;
+const TOPIC_NAME = `projects/${PROJECT_ID}/topics/transcoder-updates`;
+const SUB_NAME = &#39;transcoder-updates-sub&#39;;
+const CDN_DOMAIN = &#39;https://media.yourdomain.com&#39;; // Your Media CDN host or GCS public URL prefix
+
+let clients = []; // Store connected SSE clients
+
+// --- 1. Real-time SSE Endpoint ---
+app.get(&#39;/api/events&#39;, (req, res) =&gt; {
+  res.setHeader(&#39;Content-Type&#39;, &#39;text/event-stream&#39;);
+  res.setHeader(&#39;Cache-Control&#39;, &#39;no-cache&#39;);
+  res.setHeader(&#39;Connection&#39;, &#39;keep-alive&#39;);
+  res.flushHeaders();
+
+  clients.push(res);
+  req.on(&#39;close&#39;, () =&gt; {
+    clients = clients.filter(client =&gt; client !== res);
+  });
+});
+
+const sendEventToClients = (data) =&gt; {
+  clients.forEach(client =&gt; client.write(`data: ${JSON.stringify(data)}\n\n`));
+};
+</code></pre>
+<aside class="special"><p><strong>Why Server-Sent Events (SSE)?</strong> Video transcoding is an asynchronous, one-way notification flow from server to client once the job is submitted. SSE works over standard HTTP, automatically reconnects in the browser via the native <code>EventSource</code> API, and doesn&#39;t require WebSocket protocol overhead.</p>
+</aside>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Implement the Transcoder Job &amp; Pub/Sub Worker" duration="15">
+        <p>Next, add the transcoding job submission route and the Pub/Sub listener to <code>vod-backend/server.js</code>.</p>
+<h2 is-upgraded>1. Add the Transcoder Submit Endpoint (<code>POST /api/transcode</code>)</h2>
+<p>Append the <code>/api/transcode</code> route to <code>vod-backend/server.js</code>:</p>
+<pre><code language="language-javascript" class="language-javascript">// --- 2. Transcoder Submit Endpoint ---
+app.post(&#39;/api/transcode&#39;, async (req, res) =&gt; {
+  const { fileName } = req.body; // e.g., &#39;sample.mp4&#39;
+  console.log(fileName);
+  const transcoderClient = new TranscoderServiceClient();
+
+  const request = {
+    parent: transcoderClient.locationPath(PROJECT_ID, LOCATION),
+    job: {
+      inputUri: `gs://${PROJECT_ID}-raw-videos/${fileName}`,
+      outputUri: `gs://${PROJECT_ID}-transcoded-videos/output-${fileName}/`,
+      templateId: &#39;preset/web-hd&#39;,
+      config: {
+        pubsubDestination: { topic: TOPIC_NAME },
+
+        elementaryStreams: [
+          {
+            key: &#39;video-stream0&#39;,
+            videoStream: {
+              h264: {
+                widthPixels: 640,
+                heightPixels: 360,
+                frameRate: 30,
+                bitrateBps: 550000,
+                pixelFormat: &#39;yuv420p&#39;,
+                rateControlMode: &#39;vbr&#39;,
+                crfLevel: 21,
+                gopDuration: {
+                  seconds: 3,
+                  nanos: 0
+                },
+                vbvSizeBits: 550000,
+                vbvFullnessBits: 495000,
+                entropyCoder: &#39;cabac&#39;,
+                bFrameCount: 3,
+                aqStrength: 1,
+                profile: &#39;high&#39;,
+                preset: &#39;veryfast&#39;
+              }
+            }
+          },
+          {
+            key: &#39;video-stream1&#39;,
+            videoStream: {
+              h264: {
+                widthPixels: 1280,
+                heightPixels: 720,
+                frameRate: 30,
+                bitrateBps: 2500000,
+                pixelFormat: &#39;yuv420p&#39;,
+                rateControlMode: &#39;vbr&#39;,
+                crfLevel: 21,
+                gopDuration: {
+                  seconds: 3,
+                  nanos: 0
+                },
+                vbvSizeBits: 2500000,
+                vbvFullnessBits: 2250000,
+                entropyCoder: &#39;cabac&#39;,
+                bFrameCount: 3,
+                aqStrength: 1,
+                profile: &#39;high&#39;,
+                preset: &#39;veryfast&#39;
+              }
+            }
+          }
+        ],
+        // 2. Package streams into containers (muxing)
+        muxStreams: [
+          { key: &#39;sd&#39;, fileName: &#39;sd.mp4&#39;, container: &#39;mp4&#39;, elementaryStreams: [&#39;video-stream0&#39;] },
+          { key: &#39;hd&#39;, fileName: &#39;hd.mp4&#39;, container: &#39;mp4&#39;, elementaryStreams: [&#39;video-stream1&#39;] },
+          { key: &#39;media-sd&#39;, fileName: &#39;media-sd.ts&#39;, container: &#39;ts&#39;, elementaryStreams: [&#39;video-stream0&#39;] },
+          { key: &#39;media-hd&#39;, fileName: &#39;media-hd.ts&#39;, container: &#39;ts&#39;, elementaryStreams: [&#39;video-stream1&#39;] },
+          { key: &#39;video-only-sd&#39;, fileName: &#39;video-only-sd.m4s&#39;, container: &#39;fmp4&#39;, elementaryStreams: [&#39;video-stream0&#39;] },
+          { key: &#39;video-only-hd&#39;, fileName: &#39;video-only-hd.m4s&#39;, container: &#39;fmp4&#39;, elementaryStreams: [&#39;video-stream1&#39;] },
+        ],
+
+        // 3. Generate the Manifests (HLS and DASH)
+        manifests: [
+          { fileName: &#39;manifest.m3u8&#39;, type: &#39;HLS&#39;, muxStreams: [&#39;media-sd&#39;, &#39;media-hd&#39;] },
+          { fileName: &#39;manifest.mpd&#39;, type: &#39;DASH&#39;, muxStreams: [&#39;video-only-sd&#39;, &#39;video-only-hd&#39;] }
+        ]
+      }
+    }
+  };
+
+  try {
+    const [response] = await transcoderClient.createJob(request);
+    res.json({ message: &#39;Job submitted&#39;, jobName: response.name });
+  } catch (error) {
+    console.error(&#39;Error submitting job:&#39;, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+</code></pre>
+<h2 is-upgraded>Understanding the Transcoder <code>job</code> Configuration</h2>
+<p>The <code>job</code> object defines <strong>where</strong> the media lives, <strong>how</strong> to notify your application when encoding finishes, and a <strong>3-stage pipeline</strong> (<code>elementaryStreams</code> → <code>muxStreams</code> → <code>manifests</code>) that encodes once and packages everywhere.</p>
+<h3 is-upgraded>A. Top-Level I/O &amp; Event Notification</h3>
+<ul>
+<li><strong><code>inputUri</code></strong>: Points to the source video in Cloud Storage (<code>gs://${PROJECT_ID}-raw-videos/${fileName}</code>).</li>
+<li><strong><code>outputUri</code></strong>: The destination prefix in Cloud Storage (<code>gs://${PROJECT_ID}-transcoded-videos/output-${fileName}/</code>). Note the required trailing slash (<code>/</code>).</li>
+<li><strong><code>templateId</code></strong><strong> vs. </strong><strong><code>config</code></strong>: <code>preset/web-hd</code> is a built-in template, while <code>config</code> defines a custom inline <code>JobConfig</code>. When both are present, the inline <code>config</code> overrides the preset.</li>
+<li><strong><code>pubsubDestination: { topic: TOPIC_NAME }</code></strong>: Configures the Transcoder API to automatically publish a JSON notification to your Cloud Pub/Sub topic whenever the job transitions to <code>SUCCEEDED</code> or <code>FAILED</code>.</li>
+</ul>
+<h3 is-upgraded>B. Stage 1: Encoding (<code>elementaryStreams</code>)</h3>
+<p>An <strong>elementary stream</strong> is a raw, uncontainerized encoded media bitstream. Here, we create an <strong>Adaptive Bitrate (ABR) encoding ladder</strong> with two H.264 (<code>h264</code>) video renditions:</p>
+<ul>
+<li><strong><code>video-stream0</code></strong><strong> (SD — 360p)</strong>: <code>640x360</code> at <code>30</code> fps, targeting <code>550 kbps</code> (<code>bitrateBps: 550000</code>) for low-bandwidth or mobile connections.</li>
+<li><strong><code>video-stream1</code></strong><strong> (HD — 720p)</strong>: <code>1280x720</code> at <code>30</code> fps, targeting <code>2.5 Mbps</code> (<code>bitrateBps: 2500000</code>) for sharper playback on fast connections.</li>
+</ul>
+<p>Key H.264 encoder settings used in both streams:</p>
+<ul>
+<li><strong><code>pixelFormat: 'yuv420p'</code></strong>: Standard 4:2:0 planar YUV pixel format required for universal browser and hardware decoder compatibility.</li>
+<li><strong><code>rateControlMode: 'vbr'</code></strong><strong> &amp; </strong><strong><code>crfLevel: 21</code></strong>: Uses <strong>Variable Bitrate (VBR)</strong> guided by Constant Rate Factor (<code>21</code>), allocating more bits to high-motion scenes and fewer bits to static scenes.</li>
+<li><strong><code>vbvSizeBits</code></strong><strong> &amp; </strong><strong><code>vbvFullnessBits</code></strong>: Configures the <strong>Video Buffering Verifier (VBV)</strong> buffer (1 second of max bitrate, <code>90%</code> initial fullness) so bitrate spikes never stall a viewer&#39;s player buffer.</li>
+<li><strong><code>gopDuration: { seconds: 3 }</code></strong>: Forces a keyframe (I-frame) every <strong>3 seconds</strong> across both streams. Aligned Group of Pictures (GOP) boundaries allow video players to switch smoothly between 360p and 720p mid-playback without visual stutter.</li>
+<li><strong><code>profile: 'high'</code></strong><strong>, </strong><strong><code>entropyCoder: 'cabac'</code></strong><strong>, </strong><strong><code>bFrameCount: 3</code></strong><strong>, </strong><strong><code>aqStrength: 1</code></strong><strong>, </strong><strong><code>preset: 'veryfast'</code></strong>: Uses H.264 High Profile with CABAC lossless compression, 3 bi-directional frames (B-frames), and adaptive quantization (<code>1</code>) for high visual quality at fast encoding speeds (<code>veryfast</code>).</li>
+</ul>
+<h3 is-upgraded>C. Stage 2: Container Packaging (<code>muxStreams</code>)</h3>
+<p>Instead of re-encoding the video for each delivery format, <code>muxStreams</code> takes the already-encoded <code>video-stream0</code> (SD) and <code>video-stream1</code> (HD) bitstreams and wraps (<strong>muxes</strong>) them into three different container formats:</p>
+<ul>
+<li><strong>Standalone MP4 (</strong><strong><code>container: 'mp4'</code></strong><strong>)</strong>: Outputs <code>sd.mp4</code> and <code>hd.mp4</code> for progressive download.</li>
+<li><strong>MPEG-2 Transport Stream (</strong><strong><code>container: 'ts'</code></strong><strong>)</strong>: Outputs segmented <code>.ts</code> chunks (<code>media-sd</code> and <code>media-hd</code>) required for <strong>HLS</strong> streaming.</li>
+<li><strong>Fragmented MP4 (</strong><strong><code>container: 'fmp4'</code></strong><strong>)</strong>: Outputs segmented <code>.m4s</code> chunks (<code>video-only-sd</code> and <code>video-only-hd</code>) required for <strong>DASH</strong> streaming.</li>
+</ul>
+<h3 is-upgraded>D. Stage 3: Adaptive Bitrate Playlists (<code>manifests</code>)</h3>
+<p>Finally, <code>manifests</code> generates the master index files that adaptive video players read to switch bitrates dynamically:</p>
+<ul>
+<li><strong><code>manifest.m3u8</code></strong><strong> (</strong><strong><code>type: 'HLS'</code></strong><strong>)</strong>: Apple HTTP Live Streaming master playlist that references the <code>['media-sd', 'media-hd']</code> MPEG-TS mux streams. Our React frontend passes this URL to <code><ReactPlayer></code>.</li>
+<li><strong><code>manifest.mpd</code></strong><strong> (</strong><strong><code>type: 'DASH'</code></strong><strong>)</strong>: MPEG-DASH XML manifest that references the <code>['video-only-sd', 'video-only-hd']</code> fragmented MP4 mux streams.</li>
+</ul>
+<h2 is-upgraded>2. Add the Pub/Sub Worker Listener</h2>
+<p>When the Transcoder API finishes processing the video, it publishes a JSON message to <code>projects/${PROJECT_ID}/topics/transcoder-updates</code> containing the job&#39;s resource name (<code>data.job.name</code>) and state (<code>data.job.state</code>).</p>
+<p>When <code>data.job.state === 'SUCCEEDED'</code>, our backend:</p>
+<ol type="1">
+<li>Calls <code>transcoderClient.getJob({ name: jobName })</code> to fetch the full job configuration.</li>
+<li>Reads <code>jobDetails.config.output.uri</code> (e.g., <code>gs://<PROJECT_ID>-transcoded-videos/output-sample.mp4/</code>).</li>
+<li>Extracts the output folder name (<code>output-sample.mp4</code>).</li>
+<li>Builds the HLS manifest URL (<code>${CDN_DOMAIN}/${folder}/manifest.m3u8</code>) and broadcasts <code>{ state: 'SUCCEEDED', url }</code> to all SSE clients.</li>
+</ol>
+<p>Append the Pub/Sub subscriber and server listener to the bottom of <code>vod-backend/server.js</code>:</p>
+<pre><code language="language-javascript" class="language-javascript">// --- 3. Pub/Sub Worker Listener ---
+const pubsub = new PubSub({ projectId: PROJECT_ID });
+const subscription = pubsub.subscription(SUB_NAME);
+
+subscription.on(&#39;message&#39;, async message =&gt; {
+  try {
+    const transcoderClient = new TranscoderServiceClient();
+    const data = JSON.parse(message.data.toString());
+    console.log(data);
+    const jobName = data.job.name;
+    const jobState = data.job.state;
+
+    // Extract folder name from outputUri to build the CDN URL
+    if (data.job.state === &#39;SUCCEEDED&#39;) {
+      // 1. Ask the Transcoder API for the full configuration
+      const [jobDetails] = await transcoderClient.getJob({ name: jobName });
+
+      // 2. Extract the output URI
+      const outputUri = jobDetails.config.output.uri;
+
+      // 3. Parse the folder name
+      const folder = outputUri.split(&#39;/&#39;).filter(Boolean).pop();
+
+      const url = `${CDN_DOMAIN}/${folder}/manifest.m3u8`;
+      sendEventToClients({ state: &#39;SUCCEEDED&#39;, url: url });
+    }
+  } catch (err) {
+    console.error(&#39;Message parse error:&#39;, err);
+  }
+  message.ack();
+});
+
+app.listen(8080, () =&gt; console.log(&#39;Backend running on port 8080&#39;));
+</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Build the React Frontend (
+vod-frontend)" duration="12">
+        <p>Now let&#39;s build the React frontend that allows users to specify a video file in the raw bucket, start a transcoding job, monitor its state in real time, and play back the adaptive HLS stream once ready.</p>
+<h2 is-upgraded>1. Scaffold the Vite + React Project</h2>
+<p>In a new terminal window (from the workspace root directory), scaffold a Vite React project and install <code>react-player</code>:</p>
+<pre><code language="language-bash" class="language-bash">npm create vite@latest vod-frontend -- --template react
+cd vod-frontend
+npm install
+npm install react-player
+</code></pre>
+<h2 is-upgraded>2. Implement the VOD Pipeline UI (<code>src/App.jsx</code>)</h2>
+<p>Replace the contents of <code>vod-frontend/src/App.jsx</code> with the following component:</p>
+<pre><code language="language-jsx" class="language-jsx">import React, { useState, useEffect } from &#39;react&#39;;
+import ReactPlayer from &#39;react-player&#39;;
+import &#39;./App.css&#39;;
+
+function App() {
+  const [fileName, setFileName] = useState(&#39;sample.mp4&#39;);
+  const [status, setStatus] = useState(&#39;Idle&#39;);
+  const [videoUrl, setVideoUrl] = useState(null);
+
+  useEffect(() =&gt; {
+    // Connect to the backend Server-Sent Events stream
+    const eventSource = new EventSource(&#39;http://localhost:8080/api/events&#39;);
+
+    eventSource.onmessage = (event) =&gt; {
+      const data = JSON.parse(event.data);
+      setStatus(data.state);
+      if (data.state === &#39;SUCCEEDED&#39; &amp;&amp; data.url) {
+        setVideoUrl(data.url);
+      }
+    };
+
+    return () =&gt; eventSource.close();
+  }, []);
+
+  const startTranscoding = async () =&gt; {
+    setStatus(&#39;Submitting...&#39;);
+    setVideoUrl(null);
+    try {
+      await fetch(&#39;http://localhost:8080/api/transcode&#39;, {
+        method: &#39;POST&#39;,
+        headers: { &#39;Content-Type&#39;: &#39;application/json&#39; },
+        body: JSON.stringify({ fileName })
+      });
+      setStatus(&#39;Processing&#39;);
+    } catch (err) {
+      setStatus(&#39;Error submitting job&#39;);
+    }
+  };
+
+  return (
+    &lt;div style=&#123;&#123; padding: &#39;40px&#39;, fontFamily: &#39;sans-serif&#39; }}&gt;
+      &lt;h2&gt;Google Cloud VOD Pipeline&lt;/h2&gt;
+
+      &lt;div style=&#123;&#123; marginBottom: &#39;20px&#39; }}&gt;
+        &lt;input
+          type=&#34;text&#34;
+          value={fileName}
+          onChange={(e) =&gt; setFileName(e.target.value)}
+          placeholder=&#34;File in raw bucket (e.g., sample.mp4)&#34;
+          style=&#123;&#123; padding: &#39;8px&#39;, width: &#39;250px&#39; }}
+        /&gt;
+        &lt;button onClick={startTranscoding} style=&#123;&#123; padding: &#39;8px 16px&#39;, marginLeft: &#39;10px&#39; }}&gt;
+          Transcode Video
+        &lt;/button&gt;
+      &lt;/div&gt;
+
+      &lt;div style=&#123;&#123; marginBottom: &#39;20px&#39;, padding: &#39;15px&#39;, background: &#39;#f1f3f4&#39;, borderRadius: &#39;8px&#39;, display: &#39;inline-block&#39; }}&gt;
+        &lt;strong&gt;Status: &lt;/strong&gt; {status}
+      &lt;/div&gt;
+
+      {videoUrl &amp;&amp; (
+        &lt;div style=&#123;&#123; border: &#39;2px solid #1a73e8&#39;, borderRadius: &#39;8px&#39;, overflow: &#39;hidden&#39;, width: &#39;fit-content&#39; }}&gt;
+          &lt;ReactPlayer
+            url={videoUrl}
+            controls={true}
+            playing={true}
+            width=&#34;800px&#34;
+            height=&#34;450px&#34;
+          /&gt;
+        &lt;/div&gt;
+      )}
+    &lt;/div&gt;
+  );
+}
+
+export default App;
+</code></pre>
+<h2 is-upgraded>How the Frontend Works</h2>
+<ol type="1">
+<li><strong>Persistent SSE Connection (</strong><strong><code>useEffect</code></strong><strong>)</strong>: When <code>App</code> mounts, it opens an <code>EventSource</code> connection to <code>http://localhost:8080/api/events</code>. Whenever the backend calls <code>sendEventToClients()</code>, <code>eventSource.onmessage</code> fires immediately.</li>
+<li><strong>Job Trigger (</strong><strong><code>startTranscoding</code></strong><strong>)</strong>: Clicking <strong>Transcode Video</strong> sends a <code>POST</code> request to <code>http://localhost:8080/api/transcode</code> with <code>{ fileName }</code> and updates the UI status to <code>Processing</code>.</li>
+<li><strong>Automatic Playback (</strong><strong><code>ReactPlayer</code></strong><strong>)</strong>: When the Pub/Sub message arrives and the backend pushes <code>{ state: 'SUCCEEDED', url }</code>, React sets <code>videoUrl</code> and renders <code><ReactPlayer></code> pointing to the generated <code>manifest.m3u8</code> HLS playlist.</li>
+</ol>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Run and Test the Pipeline" duration="10">
+        <h2 is-upgraded>1. Start the Backend Server</h2>
+<p>In your <code>vod-backend</code> terminal, start the Express and Pub/Sub listener server:</p>
+<pre><code language="language-bash" class="language-bash">cd vod-backend
+node server.js
+</code></pre>
+<p>You should see:</p>
+<pre><code language="language-text" class="language-text">Backend running on port 8080
+</code></pre>
+<h2 is-upgraded>2. Start the React Frontend</h2>
+<p>In a second terminal window, start the Vite development server:</p>
+<pre><code language="language-bash" class="language-bash">cd vod-frontend
+npm run dev
+</code></pre>
+<p>Open the local URL displayed in your terminal (typically <code>http://localhost:5173</code>) in your browser.</p>
+<h2 is-upgraded>3. Trigger a Transcoding Job</h2>
+<ol type="1">
+<li>Enter <code>sample.mp4</code> (or the name of the video file you uploaded to <code>gs://${PROJECT_ID}-raw-videos/</code>) in the input box.</li>
+<li>Click <strong>Transcode Video</strong>.</li>
+<li>Observe the status change from <strong>Idle</strong> -&gt; <strong>Submitting...</strong> -&gt; <strong>Processing</strong>.</li>
+<li>In your backend terminal, watch for the filename log and the incoming Pub/Sub message payload once the Transcoder API finishes: <pre><code language="language-text" class="language-text">sample.mp4
+{
+  job: {
+    name: &#39;projects/.../locations/us-central1/jobs/...&#39;,
+    state: &#39;SUCCEEDED&#39;
+  }
+}
+</code></pre>
+</li>
+<li>In the browser, the <strong>Status</strong> automatically updates to <strong>SUCCEEDED</strong> and the video player appears and starts streaming <code>manifest.m3u8</code>!</li>
+</ol>
+<h2 is-upgraded>4. Inspect the Transcoded Artifacts in Cloud Storage</h2>
+<p>You can verify all generated files (MP4s, <code>.ts</code> segments, <code>.m4s</code> segments, and both HLS/DASH manifests) in your output bucket:</p>
+<pre><code language="language-bash" class="language-bash">gcloud storage ls gs://${PROJECT_ID}-transcoded-videos/output-sample.mp4/
+</code></pre>
+<p>Expected output files include:</p>
+<ul>
+<li><code>sd.mp4</code> and <code>hd.mp4</code></li>
+<li><code>media-sd.m3u8</code>, <code>media-hd.m3u8</code>, and <code>.ts</code> video segments</li>
+<li><code>video-only-sd.m4s</code>, <code>video-only-hd.m4s</code></li>
+<li><code>manifest.m3u8</code> (master HLS playlist)</li>
+<li><code>manifest.mpd</code> (DASH manifest)</li>
+</ul>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Clean Up" duration="3">
+        <p>To avoid incurring ongoing Google Cloud charges, delete the resources created during this codelab:</p>
+<pre><code language="language-bash" class="language-bash"># Delete Pub/Sub subscription and topic
+gcloud pubsub subscriptions delete transcoder-updates-sub
+gcloud pubsub topics delete transcoder-updates
+
+# Delete Cloud Storage buckets and their contents
+gcloud storage rm -r gs://${PROJECT_ID}-raw-videos
+gcloud storage rm -r gs://${PROJECT_ID}-transcoded-videos
+</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Congratulations!" duration="2">
+        <p>You have built an event-driven Video on Demand (VOD) transcoding pipeline using Google Cloud!</p>
+<h2 is-upgraded>What You Covered</h2>
+<ul>
+<li>Configuring <strong>Google Cloud Transcoder API</strong> jobs with custom H.264 elementary streams (SD &amp; HD), container muxing (<code>mp4</code>, <code>ts</code>, <code>fmp4</code>), and adaptive streaming manifests (<code>HLS</code> and <code>DASH</code>).</li>
+<li>Using <code>pubsubDestination</code> to decouple job execution from completion handling via <strong>Cloud Pub/Sub</strong>.</li>
+<li>Pushing real-time asynchronous job notifications from <strong>Node.js/Express</strong> to a <strong>React</strong> client using <strong>Server-Sent Events (SSE)</strong>.</li>
+</ul>
+
+
+      </google-codelab-step>
+    
+  </google-codelab>
+
+  <script src="https://storage.googleapis.com/claat-public/native-shim.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/custom-elements.min.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/prettify.js"></script>
+  <script src="https://storage.googleapis.com/claat-public/codelab-elements.js"></script>
+  <script src="//support.google.com/inapp/api.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "environment": "web",
+  "format": "html",
+  "prefix": "https://storage.googleapis.com",
+  "mainga": "UA-49880327-14",
+  "updated": "2026-10-09T11:54:38+02:00",
+  "id": "gcp-vod-transcoder-eda-codelab",
+  "duration": 65,
+  "title": "Build an Event-Driven VOD Pipeline with Cloud Transcoder API, Pub/Sub, and React",
+  "authors": "Developer Relations",
+  "summary": "Build an Event-Driven Video on Demand (VOD) Transcoding Pipeline with Google Cloud Transcoder API, Pub/Sub, Server-Sent Events (SSE), and React",
+  "source": "index.md",
+  "theme": "",
+  "status": [
+    "published"
+  ],
+  "category": [
+    "cloud",
+    "media",
+    "node.js",
+    "react"
+  ],
+  "tags": [
+    "web"
+  ],
+  "url": "gcp-vod-transcoder-eda-codelab"
+}
