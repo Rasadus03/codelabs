@@ -1,0 +1,27 @@
+{
+  "environment": "web",
+  "format": "html",
+  "prefix": "https://storage.googleapis.com",
+  "mainga": "UA-49880327-14",
+  "updated": "2026-10-09T13:06:30+02:00",
+  "id": "Custom Video-Only MP4 Pipeline with React and Node.js",
+  "duration": 65,
+  "title": "Custom Video-Only MP4 Pipeline with React and Node.js",
+  "authors": "Developer Relations",
+  "summary": "Build a Custom Video-Only MP4 Pipeline with Google Cloud Transcoder API, Pub/Sub, React, and Node.js",
+  "source": "Custom Video-Only MP4 Pipeline with React and Node.js/index.md",
+  "theme": "",
+  "status": [
+    "published"
+  ],
+  "category": [
+    "cloud",
+    "media",
+    "node.js",
+    "react"
+  ],
+  "tags": [
+    "web"
+  ],
+  "url": "Custom Video-Only MP4 Pipeline with React and Node.js"
+}
