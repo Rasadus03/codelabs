@@ -1,5 +1,5 @@
 summary: Build an Event-Driven Video on Demand (VOD) Transcoding Pipeline with Google Cloud Transcoder API, Pub/Sub, Server-Sent Events (SSE), and React
-id: gcp-vod-transcoder-eda-codelab
+id: trasncoder_vidoe_EDA
 categories: Cloud, Media, Node.js, React
 environments: Web
 status: Published
