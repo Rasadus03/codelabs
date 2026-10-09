@@ -1,6 +1,12 @@
 # Ignore application code (only publish the codelab)
 vod-backend/
 vod-frontend/
+**/src/
+**/custom-vod-backend/
+**/custom-vod-frontend/
+
+# Ignore nested claat export preview folder
+Custom Video-Only MP4 Pipeline with React and Node.js/Custom Video-Only MP4 Pipeline with React and Node.js/
 
 # Dependencies & Build outputs
 node_modules/
